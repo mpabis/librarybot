@@ -1,0 +1,57 @@
+[project]
+name = "librarybot"
+version = "0.1.0"
+description = "Stockholm Public Library due date checker and notification system."
+requires-python = ">=3.9"
+dependencies = [
+    "requests>=2.28.0",
+    "beautifulsoup4>=4.12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+    "mypy",
+    "black",
+    "types-requests",
+    "types-beautifulsoup4",
+]
+
+# --- Tool Configurations ---
+
+[tool.black]
+line-length = 88
+target-version = ['py311']
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+# See all rules: https://docs.astral.sh/ruff/rules/
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+ignore = []
+
+[tool.ruff.lint.mccabe]
+# Avoid overly complex functions
+max-complexity = 10
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+check_untyped_defs = true
