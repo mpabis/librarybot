@@ -5,6 +5,7 @@ config.json
 *.env
 email_notification_*.txt
 *.html
+*.log
 
 # Python
 __pycache__/

@@ -10,6 +10,7 @@ import requests
 
 # Try to load environment variables from .env file
 try:
+    print("Script started at:", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     from load_env import load_env_file
     load_env_file()
 except ImportError:
