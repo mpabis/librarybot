@@ -10,7 +10,7 @@ import requests
 
 # Try to load environment variables from .env file
 try:
-    print("Script started at:", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    print("Script started at:", datetime.now().strftime("%Y-%m-%d %H:%M:%S"), " ----------------------")
     from load_env import load_env_file
     load_env_file()
 except ImportError:
@@ -66,7 +66,7 @@ def load_config() -> Dict | None:
             }
         }
         
-        print("✅ Configuration loaded from environment variables")
+        # print("✅ Configuration loaded from environment variables")
         return config
     
     # Fallback to config.json
@@ -470,7 +470,9 @@ def check_due_dates() -> List[str]:
                 print(f"📖 No loans found for {account_name}")
         else:
             print(f"❌ Authentication failed for {account_name}")
-        
+
+    print()
+
     return all_due_dates
 
 

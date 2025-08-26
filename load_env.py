@@ -17,7 +17,7 @@ def load_env_file(filepath=".env"):
                     key, value = line.split('=', 1)
                     os.environ[key.strip()] = value.strip()
         
-        print(f"✅ Environment variables loaded from {filepath}")
+        #print(f"✅ Environment variables loaded from {filepath}")
         return True
     except Exception as e:
         print(f"❌ Error loading {filepath}: {e}")
