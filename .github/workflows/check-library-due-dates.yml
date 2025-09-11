@@ -1,0 +1,59 @@
+name: Check Library Due Dates
+
+on:
+  schedule:
+    # Run every day at 8:00 AM UTC
+    # Adjust the time based on your timezone preference
+    # This is 8:00 AM UTC, which is 9:00 AM CET (Stockholm time) or 10:00 AM CEST
+    - cron: '0 8 * * *'
+  
+  # Allow manual trigger from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  check-due-dates:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Run library due date checker
+      env:
+        # Library account credentials (set these as GitHub Secrets)
+        LIBRARY_USERNAME_1: ${{ secrets.LIBRARY_USERNAME_1 }}
+        LIBRARY_PASSWORD_1: ${{ secrets.LIBRARY_PASSWORD_1 }}
+        LIBRARY_USERNAME_2: ${{ secrets.LIBRARY_USERNAME_2 }}
+        LIBRARY_PASSWORD_2: ${{ secrets.LIBRARY_PASSWORD_2 }}
+        
+        # Email configuration (set these as GitHub Secrets)
+        RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+        MAILGUN_DOMAIN: ${{ secrets.MAILGUN_DOMAIN }}
+        MAILGUN_SENDER_EMAIL: ${{ secrets.MAILGUN_SENDER_EMAIL }}
+        MAILGUN_API_KEY: ${{ secrets.MAILGUN_API_KEY }}
+        
+        # Notification settings
+        NOTIFY_BEFORE_DUE_DAYS: ${{ vars.NOTIFY_BEFORE_DUE_DAYS || '2' }}
+        NOTIFICATIONS_ENABLED: ${{ vars.NOTIFICATIONS_ENABLED || 'true' }}
+      run: |
+        python check-due-dates.py
+    
+    - name: Upload notification artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: email-notifications-${{ github.run_number }}
+        path: email_notification_*.txt
+        retention-days: 30
+        if-no-files-found: ignore
