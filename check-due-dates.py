@@ -305,9 +305,40 @@ def send_email_reminder(loan_info: List[tuple[str, str, bool]], config: Dict, ac
     subject = "Library Books Due Soon - Reminder"
     body = "The following books are due soon:\n\n"
     
+    today = datetime.now().date()
+    
     for title, due_date, is_renewable in sorted(loan_info, key=lambda x: x[1]):
-        renewable_text = " (Renewable)" if is_renewable else " (Not renewable)"
-        body += f"• {due_date} - {title}{renewable_text}\n"
+        # Calculate days until due date
+        try:
+            due_date_obj = datetime.strptime(due_date, "%Y-%m-%d").date()
+            days_until_due = (due_date_obj - today).days
+            
+            if days_until_due < 0:
+                days_text = f"{abs(days_until_due)} days OVERDUE"
+                urgency = "🚨 "
+            elif days_until_due == 0:
+                days_text = "DUE TODAY"
+                urgency = "⏰ "
+            elif days_until_due == 1:
+                days_text = "due tomorrow"
+                urgency = "⚠️ "
+            elif days_until_due <= 3:
+                days_text = f"{days_until_due} days left"
+                urgency = "⚠️ "
+            else:
+                days_text = f"{days_until_due} days left"
+                urgency = "📅 "
+        except ValueError:
+            days_text = "unknown"
+            urgency = "❓ "
+        
+        # Use different icon for non-renewable books as first character
+        if not is_renewable:
+            line_icon = "🔴 "
+        else:
+            line_icon = urgency
+        
+        body += f"{line_icon}{due_date} - {days_text} - {title}\n"
     
     body += f"\nTotal books: {len(loan_info)}"
     body += "\n\nPlease return or renew them before the due date."
