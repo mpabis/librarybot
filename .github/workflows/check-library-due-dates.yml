@@ -10,13 +10,28 @@ on:
   # Allow manual trigger from the Actions tab
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
 jobs:
   check-due-dates:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+
+    - name: Configure GitHub Pages
+      uses: actions/configure-pages@v5
     
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -46,14 +61,26 @@ jobs:
         # Notification settings
         NOTIFY_BEFORE_DUE_DAYS: ${{ vars.NOTIFY_BEFORE_DUE_DAYS || '2' }}
         NOTIFICATIONS_ENABLED: ${{ vars.NOTIFICATIONS_ENABLED || 'true' }}
+
+        # Encrypted web report passcode (set this as a GitHub Secret)
+        REPORT_PASSPHRASE: ${{ secrets.REPORT_PASSPHRASE }}
       run: |
         python check-due-dates.py
     
     - name: Upload notification artifacts
-      if: always()
+      if: ${{ vars.UPLOAD_EMAIL_ARTIFACTS == 'true' }}
       uses: actions/upload-artifact@v4
       with:
         name: email-notifications-${{ github.run_number }}
         path: email_notification_*.txt
         retention-days: 30
         if-no-files-found: ignore
+
+    - name: Upload Pages artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: public
+
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4

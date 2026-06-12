@@ -6,6 +6,7 @@ A Python script to check due dates for Stockholm Library books and send email re
 
 - ✅ Multi-account support (check multiple library cards)
 - 📧 Email notifications via Mailgun
+- 🔒 Encrypted GitHub Pages report for current loans
 - 🔄 Renewal status checking (shows which books can be renewed)
 - 🎨 Color-coded output (red text for books that must be returned)
 - 📅 Days until due date calculation
@@ -46,6 +47,12 @@ pip install requests beautifulsoup4
    # Notification settings
    NOTIFY_BEFORE_DUE_DAYS=2
    NOTIFICATIONS_ENABLED=true
+
+   # Web report encryption
+   REPORT_PASSPHRASE=your_private_report_passcode
+
+   # Optional privacy setting
+   REDACT_LOAN_TITLES=false
    ```
 
 **Option B: JSON Config File (for development only)**
@@ -68,6 +75,28 @@ If you want email notifications:
 ```bash
 python check-due-dates.py
 ```
+
+Each run also writes a static web report to `public/`. The page shell is public,
+but the loan data is encrypted in `public/encrypted-report.json` and can only be
+opened with `REPORT_PASSPHRASE`.
+
+### Publish the GitHub Pages Report
+
+The GitHub Actions workflow publishes `public/` to GitHub Pages after the bot
+runs. Configure these repository secrets before enabling Pages:
+
+- `REPORT_PASSPHRASE`: passcode used to encrypt the web report. Store the same
+  value in Bitwarden and enter it when opening the page.
+- Existing library and Mailgun secrets: `LIBRARY_USERNAME_1`,
+  `LIBRARY_PASSWORD_1`, `RECIPIENT_EMAIL`, `MAILGUN_DOMAIN`,
+  `MAILGUN_SENDER_EMAIL`, and `MAILGUN_API_KEY`.
+- Optional repository variable `UPLOAD_EMAIL_ARTIFACTS=true` uploads plaintext
+  backup notification files. Leave it unset unless you need those artifacts.
+
+Static GitHub Pages cannot provide server-side authentication. This project
+protects the book list by encrypting the report data before upload; do not
+replace this with a plain JavaScript password prompt over unencrypted data.
+Workflow logs redact loan titles by default in GitHub Actions.
 
 ### Example Output
 
@@ -113,6 +142,7 @@ The `.gitignore` file excludes:
 - `.env`
 - `email_notification_*.txt`
 - `*.html`
+- `public/`
 
 ## Common Environment Variable Approaches
 

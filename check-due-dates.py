@@ -1,10 +1,11 @@
 """Library Due Date Checker for Stockholm Library."""
 
+import base64
 import json
 import os
 import re
 from datetime import datetime, timedelta
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import requests
 
@@ -17,6 +18,359 @@ except ImportError:
     pass
 
 GRAPHQL_URL = "https://biblioteket.stockholm.se/graphql/"
+REPORT_OUTPUT_DIR = "public"
+REPORT_INDEX_FILE = "index.html"
+REPORT_DATA_FILE = "encrypted-report.json"
+REPORT_PASSPHRASE_ENV = "REPORT_PASSPHRASE"
+REPORT_KEY_ITERATIONS = 200_000
+
+
+def get_due_status(due_date: str) -> Dict[str, Any]:
+    """Return display metadata for a loan due date."""
+    today = datetime.now().date()
+
+    try:
+        due_date_obj = datetime.strptime(due_date, "%Y-%m-%d").date()
+    except ValueError:
+        return {
+            "daysUntilDue": None,
+            "status": "unknown",
+            "statusLabel": "Unknown due date",
+        }
+
+    days_until_due = (due_date_obj - today).days
+    if days_until_due < 0:
+        status = "overdue"
+        label = f"{abs(days_until_due)} days overdue"
+    elif days_until_due == 0:
+        status = "due-today"
+        label = "Due today"
+    elif days_until_due == 1:
+        status = "due-tomorrow"
+        label = "Due tomorrow"
+    elif days_until_due <= 3:
+        status = "soon"
+        label = f"{days_until_due} days left"
+    else:
+        status = "upcoming"
+        label = f"{days_until_due} days left"
+
+    return {
+        "daysUntilDue": days_until_due,
+        "status": status,
+        "statusLabel": label,
+    }
+
+
+def should_redact_loan_titles() -> bool:
+    """Return whether loan titles should be hidden from console logs."""
+    configured_value = os.getenv("REDACT_LOAN_TITLES")
+    if configured_value is not None:
+        return configured_value.lower() == "true"
+
+    return os.getenv("GITHUB_ACTIONS", "").lower() == "true"
+
+
+def build_report_account(
+    account_name: str,
+    loan_info: List[tuple[str, str, bool]],
+    error: str | None = None,
+) -> Dict[str, Any]:
+    """Build a serializable report entry for one library account."""
+    loans = []
+    for title, due_date, is_renewable in sorted(loan_info, key=lambda item: item[1]):
+        due_status = get_due_status(due_date)
+        loans.append(
+            {
+                "title": title,
+                "dueDate": due_date,
+                "isRenewable": is_renewable,
+                **due_status,
+            }
+        )
+
+    return {
+        "name": account_name,
+        "loanCount": len(loans),
+        "error": error,
+        "loans": loans,
+    }
+
+
+def encrypt_report_payload(report: Dict[str, Any], passphrase: str) -> Dict[str, Any]:
+    """Encrypt report data for client-side decryption on GitHub Pages."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
+    salt = os.urandom(16)
+    nonce = os.urandom(12)
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=REPORT_KEY_ITERATIONS,
+    )
+    key = kdf.derive(passphrase.encode("utf-8"))
+    aesgcm = AESGCM(key)
+    plaintext = json.dumps(report, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    ciphertext = aesgcm.encrypt(nonce, plaintext, None)
+
+    return {
+        "version": 1,
+        "cipher": "AES-GCM",
+        "kdf": "PBKDF2-HMAC-SHA256",
+        "iterations": REPORT_KEY_ITERATIONS,
+        "salt": base64.b64encode(salt).decode("ascii"),
+        "nonce": base64.b64encode(nonce).decode("ascii"),
+        "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
+    }
+
+
+def write_report_index(output_dir: str) -> None:
+    """Write the static GitHub Pages shell used to decrypt the report."""
+    os.makedirs(output_dir, exist_ok=True)
+    index_path = os.path.join(output_dir, REPORT_INDEX_FILE)
+    with open(index_path, "w", encoding="utf-8") as f:
+        f.write(
+            """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Library Loans</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f5f7fb;
+      color: #1f2937;
+    }
+    body { margin: 0; }
+    main { max-width: 960px; margin: 0 auto; padding: 32px 18px 48px; }
+    header { display: flex; justify-content: space-between; gap: 16px; align-items: flex-end; margin-bottom: 24px; }
+    h1 { margin: 0; font-size: clamp(2rem, 6vw, 4rem); line-height: 1; letter-spacing: 0; }
+    h2 { margin: 28px 0 12px; font-size: 1.1rem; }
+    .muted { color: #64748b; }
+    .auth, .account, .empty { background: #fff; border: 1px solid #dbe3ef; border-radius: 8px; padding: 18px; }
+    .auth form { display: grid; grid-template-columns: 1fr auto; gap: 10px; margin-top: 12px; }
+    input, button { font: inherit; border-radius: 6px; min-height: 42px; }
+    input { border: 1px solid #cbd5e1; padding: 0 12px; }
+    button { border: 0; background: #0f766e; color: #fff; padding: 0 18px; cursor: pointer; }
+    button:disabled { opacity: .7; cursor: wait; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 12px 10px; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: top; }
+    th { font-size: .8rem; color: #64748b; text-transform: uppercase; }
+    .badge { display: inline-block; border-radius: 999px; padding: 4px 9px; font-size: .85rem; font-weight: 650; white-space: nowrap; }
+    .overdue, .due-today { background: #fee2e2; color: #991b1b; }
+    .due-tomorrow, .soon { background: #fef3c7; color: #92400e; }
+    .upcoming { background: #dcfce7; color: #166534; }
+    .unknown { background: #e2e8f0; color: #475569; }
+    .error { color: #b91c1c; }
+    @media (prefers-color-scheme: dark) {
+      :root { background: #111827; color: #f9fafb; }
+      .auth, .account, .empty { background: #1f2937; border-color: #374151; }
+      input { background: #111827; color: #f9fafb; border-color: #4b5563; }
+      th, td { border-bottom-color: #374151; }
+      .muted { color: #9ca3af; }
+    }
+    @media (max-width: 680px) {
+      header { display: block; }
+      .auth form { grid-template-columns: 1fr; }
+      table, thead, tbody, th, td, tr { display: block; }
+      thead { display: none; }
+      tr { border-bottom: 1px solid #e2e8f0; padding: 10px 0; }
+      td { border: 0; padding: 4px 0; }
+      td::before { content: attr(data-label); display: block; color: #64748b; font-size: .78rem; text-transform: uppercase; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>Library Loans</h1>
+        <p class="muted" id="summary">Encrypted report</p>
+      </div>
+    </header>
+
+    <section class="auth" id="auth">
+      <strong>Enter passcode</strong>
+      <p class="muted">Book data is encrypted and decrypted only in this browser.</p>
+      <form id="passcode-form">
+        <input id="passcode" type="password" autocomplete="current-password" placeholder="Passcode" required autofocus>
+        <button id="unlock" type="submit">Unlock</button>
+      </form>
+      <p class="error" id="error" role="alert"></p>
+    </section>
+
+    <section id="report" hidden></section>
+  </main>
+
+  <script>
+    const form = document.getElementById("passcode-form");
+    const passcodeInput = document.getElementById("passcode");
+    const unlockButton = document.getElementById("unlock");
+    const errorEl = document.getElementById("error");
+    const reportEl = document.getElementById("report");
+    const summaryEl = document.getElementById("summary");
+    let encryptedReport;
+
+    function base64ToBytes(value) {
+      const binary = atob(value);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      return bytes;
+    }
+
+    async function decryptReport(passcode) {
+      const encoder = new TextEncoder();
+      const keyMaterial = await crypto.subtle.importKey(
+        "raw",
+        encoder.encode(passcode),
+        "PBKDF2",
+        false,
+        ["deriveKey"]
+      );
+      const key = await crypto.subtle.deriveKey(
+        {
+          name: "PBKDF2",
+          salt: base64ToBytes(encryptedReport.salt),
+          iterations: encryptedReport.iterations,
+          hash: "SHA-256",
+        },
+        keyMaterial,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["decrypt"]
+      );
+      const plaintext = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: base64ToBytes(encryptedReport.nonce) },
+        key,
+        base64ToBytes(encryptedReport.ciphertext)
+      );
+      return JSON.parse(new TextDecoder().decode(plaintext));
+    }
+
+    function textCell(row, label, value) {
+      const cell = document.createElement("td");
+      cell.dataset.label = label;
+      cell.textContent = value;
+      row.appendChild(cell);
+      return cell;
+    }
+
+    function renderReport(report) {
+      document.getElementById("auth").hidden = true;
+      reportEl.hidden = false;
+      summaryEl.textContent = `${report.totalLoans} loans updated ${new Date(report.generatedAt).toLocaleString()}`;
+      reportEl.replaceChildren();
+
+      if (report.accounts.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No accounts were included in this report.";
+        reportEl.appendChild(empty);
+        return;
+      }
+
+      report.accounts.forEach((account) => {
+        const section = document.createElement("section");
+        section.className = "account";
+        const heading = document.createElement("h2");
+        heading.textContent = `${account.name} (${account.loanCount})`;
+        section.appendChild(heading);
+
+        if (account.error) {
+          const error = document.createElement("p");
+          error.className = "error";
+          error.textContent = account.error;
+          section.appendChild(error);
+        } else if (account.loans.length === 0) {
+          const empty = document.createElement("p");
+          empty.className = "muted";
+          empty.textContent = "No active loans.";
+          section.appendChild(empty);
+        } else {
+          const table = document.createElement("table");
+          table.innerHTML = "<thead><tr><th>Title</th><th>Due date</th><th>Status</th><th>Renewable</th></tr></thead>";
+          const body = document.createElement("tbody");
+          account.loans.forEach((loan) => {
+            const row = document.createElement("tr");
+            textCell(row, "Title", loan.title);
+            textCell(row, "Due date", loan.dueDate);
+            const status = textCell(row, "Status", "");
+            const badge = document.createElement("span");
+            badge.className = `badge ${loan.status}`;
+            badge.textContent = loan.statusLabel;
+            status.appendChild(badge);
+            textCell(row, "Renewable", loan.isRenewable ? "Yes" : "No");
+            body.appendChild(row);
+          });
+          table.appendChild(body);
+          section.appendChild(table);
+        }
+        reportEl.appendChild(section);
+      });
+    }
+
+    async function loadEncryptedReport() {
+      const response = await fetch("encrypted-report.json", { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error("Encrypted report data is missing. Configure REPORT_PASSPHRASE and rerun the workflow.");
+      }
+      encryptedReport = await response.json();
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      errorEl.textContent = "";
+      unlockButton.disabled = true;
+      try {
+        if (!encryptedReport) {
+          await loadEncryptedReport();
+        }
+        renderReport(await decryptReport(passcodeInput.value));
+        passcodeInput.value = "";
+      } catch (error) {
+        errorEl.textContent = error.message.includes("missing")
+          ? error.message
+          : "Unable to unlock the report. Check the passcode and try again.";
+      } finally {
+        unlockButton.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
+"""
+        )
+
+
+def write_web_report(accounts: List[Dict[str, Any]]) -> None:
+    """Write encrypted report data and its static web page shell."""
+    write_report_index(REPORT_OUTPUT_DIR)
+    passphrase = os.getenv(REPORT_PASSPHRASE_ENV)
+    if not passphrase:
+        print(f"Warning: {REPORT_PASSPHRASE_ENV} is not set; encrypted web report was not written")
+        return
+
+    report = {
+        "generatedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "totalLoans": sum(account["loanCount"] for account in accounts),
+        "accounts": accounts,
+    }
+    encrypted_report = encrypt_report_payload(report, passphrase)
+    report_path = os.path.join(REPORT_OUTPUT_DIR, REPORT_DATA_FILE)
+    with open(report_path, "w", encoding="utf-8") as f:
+        json.dump(encrypted_report, f, indent=2)
+        f.write("\n")
+
+    print(f"Encrypted web report written to {report_path}")
 
 
 def load_config() -> Dict | None:
@@ -446,16 +800,20 @@ def check_due_dates() -> List[str]:
         return []
 
     all_due_dates = []
+    report_accounts = []
     
     for i, account in enumerate(enabled_accounts, 1):
         username = account.get("username", "")
         password = account.get("password", "")
-        account_name = account.get("name", "")
+        account_name = account.get("name", "") or f"Account {i}"
         
         print(f"\nAccount: {account_name}")
         
         if not username or not password:
             print(f"❌ Missing credentials for account: {account_name}")
+            report_accounts.append(
+                build_report_account(account_name, [], "Missing account credentials")
+            )
             continue
 
         session = create_session()
@@ -470,10 +828,12 @@ def check_due_dates() -> List[str]:
                 # Calculate days until first due date
                 today = datetime.now().date()
                 earliest_due_date = None
+                redact_titles = should_redact_loan_titles()
                 
                 for title, due_date, is_renewable in loan_info:
                     renewable_status = "      " if is_renewable else "\033[31mreturn\033[0m"
-                    print(f"  {due_date}  {renewable_status}  {title}")
+                    title_for_log = "[hidden in automation logs]" if redact_titles else title
+                    print(f"  {due_date}  {renewable_status}  {title_for_log}")
                     try:
                         due_date_obj = datetime.strptime(due_date, "%Y-%m-%d").date()
                         if earliest_due_date is None or due_date_obj < earliest_due_date:
@@ -497,12 +857,18 @@ def check_due_dates() -> List[str]:
                 
                 check_and_send_reminder(loan_info, config, account)
                 all_due_dates.extend([due_date for _, due_date, _ in loan_info])
+                report_accounts.append(build_report_account(account_name, loan_info))
             else:
                 print(f"📖 No loans found for {account_name}")
+                report_accounts.append(build_report_account(account_name, []))
         else:
             print(f"❌ Authentication failed for {account_name}")
+            report_accounts.append(
+                build_report_account(account_name, [], "Authentication failed")
+            )
 
     print()
+    write_web_report(report_accounts)
 
     return all_due_dates
 
