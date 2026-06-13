@@ -1,11 +1,10 @@
 name: Check Library Due Dates
 
 on:
-#  schedule:
-    # Run every day at 8:00 AM UTC
-    # Adjust the time based on your timezone preference
-    # This is 8:00 AM UTC, which is 9:00 AM CET (Stockholm time) or 10:00 AM CEST
-#    - cron: '0 6 * * *'
+  schedule:
+    # Run every day at 06:00 UTC, which is 08:00 Stockholm time during summer
+    # time and 07:00 Stockholm time during winter time.
+    - cron: '0 6 * * *'
   
   # Allow manual trigger from the Actions tab
   workflow_dispatch:
