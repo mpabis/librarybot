@@ -11,8 +11,7 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
+  pages: read
 
 concurrency:
   group: github-pages
@@ -21,10 +20,6 @@ concurrency:
 jobs:
   check-due-dates:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    
     steps:
     - name: Checkout repository
       uses: actions/checkout@v6
@@ -83,6 +78,18 @@ jobs:
       with:
         path: public
 
+  deploy:
+    # Give the uploaded artifact time to become visible and allow deploy-only retries.
+    # https://github.com/actions/deploy-pages/issues/451
+    needs: check-due-dates
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
     - name: Deploy to GitHub Pages
       id: deployment
       uses: actions/deploy-pages@v5
